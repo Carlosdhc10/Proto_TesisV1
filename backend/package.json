@@ -1,5 +1,4 @@
 {
-<<<<<<< HEAD
   "name": "backend",
   "version": "0.0.1",
   "description": "",
@@ -74,9 +73,5 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
-=======
-  "dependencies": {
-    "pdf-parse": "^2.4.5"
->>>>>>> 76f6db4 (Initial commit - tesis)
   }
 }
