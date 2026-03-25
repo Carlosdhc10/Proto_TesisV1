@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { extractTextFromPDF } from './pdf.service';
-import { calculateSimilarity } from '../analysis/similarity.service';
 import { splitIntoParagraphs } from '../analysis/text.utils';
+import axios from 'axios'; // ⬅️ Nueva importación
 
 type DetailedMatch = {
   documentId: number;
@@ -10,12 +10,6 @@ type DetailedMatch = {
   similarity: number;
   text1: string;
   text2: string;
-};
-
-type SummaryResult = {
-  documentId: number;
-  title: string;
-  similarity: number;
 };
 
 @Injectable()
@@ -26,93 +20,37 @@ export class DocumentsService {
     try {
       console.log('1. Iniciando proceso...');
 
-      // 1️⃣ Extraer texto
-      console.log('2. Extrayendo texto...');
+      // 1️⃣ Extraer texto del PDF
       const text: string = await extractTextFromPDF(file.path);
-
-      if (!text || text.trim().length === 0) {
-        console.log('❌ Texto vacío');
-        throw new Error('No se pudo extraer texto del PDF');
-      }
-
-      console.log('2. Texto extraído');
+      if (!text || text.trim().length === 0) throw new Error('No se pudo extraer texto');
 
       // 2️⃣ Validar usuario
-      console.log('4. Validando usuario...');
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-      });
+      const user = await this.prisma.user.findUnique({ where: { id: userId } });
+      if (!user) throw new Error('El usuario no existe');
 
-      if (!user) {
-        console.log('❌ Usuario no existe');
-        throw new Error('El usuario no existe');
+      // 3️⃣ Obtener todos los textos de la base de datos para comparar
+      const existingDocs = await this.prisma.document.findMany();
+      const allBaseTexts = existingDocs.map(doc => doc.content);
+
+      let aiSimilarity = 0;
+
+      // 🔥 LLAMADA A LA IA (Python)
+      // Solo si hay documentos previos en la BD
+      if (allBaseTexts.length > 0) {
+        console.log('🤖 Consultando a la IA (Puerto 5000)...');
+        try {
+          const response = await axios.post('http://localhost:5000/compare', {
+            texto_nuevo: text,
+            textos_base: allBaseTexts
+          });
+          aiSimilarity = response.data.similitud_ia;
+          console.log(`✅ IA detectó: ${aiSimilarity}% de similitud semántica`);
+        } catch (error) {
+          console.error('❌ Error conectando con la IA de Python. ¿Está encendida?');
+        }
       }
 
-      console.log('3. Usuario válido');
-
-      // 🔹 Dividir en párrafos
-      const paragraphs: string[] = splitIntoParagraphs(text);
-
-      console.log('4. Párrafos detectados:', paragraphs.length);
-
-      // 3️⃣ Obtener documentos existentes
-      console.log('6. Consultando documentos...');
-      const existingDocs = await this.prisma.document.findMany();
-
-      // 🔥 Comparación tipo Turnitin
-      const detailedMatches: DetailedMatch[] = [];
-
-      existingDocs.forEach((doc) => {
-        if (typeof doc.content !== 'string') return;
-
-        const docParagraphs: string[] = splitIntoParagraphs(doc.content);
-
-        paragraphs.forEach((p1) => {
-          docParagraphs.forEach((p2) => {
-            const similarity: number = calculateSimilarity(p1, p2);
-
-            if (similarity > 70) {
-              detailedMatches.push({
-                documentId: doc.id,
-                title: doc.title,
-                similarity,
-                text1: p1,
-                text2: p2,
-              });
-            }
-          });
-        });
-      });
-
-      console.log('5. Comparación por párrafos lista');
-
-      // 🔹 Agrupar por documento
-      const grouped: Record<number, { title: string; similarities: number[] }> =
-        {};
-
-      detailedMatches.forEach((match: DetailedMatch) => {
-        if (!grouped[match.documentId]) {
-          grouped[match.documentId] = {
-            title: match.title,
-            similarities: [],
-          };
-        }
-
-        grouped[match.documentId].similarities.push(match.similarity);
-      });
-
-      // 🔹 Calcular promedio
-      const summary: SummaryResult[] = Object.entries(grouped).map(
-        ([docId, data]) => ({
-          documentId: Number(docId),
-          title: data.title,
-          similarity:
-            data.similarities.reduce((a, b) => a + b, 0) /
-            data.similarities.length,
-        }),
-      );
-
-      // 4️⃣ Guardar documento
+      // 4️⃣ Guardar el documento analizado en PostgreSQL
       const document = await this.prisma.document.create({
         data: {
           title,
@@ -122,14 +60,25 @@ export class DocumentsService {
         },
       });
 
-      console.log('6. Documento guardado');
-
+      // Estructuramos la respuesta para el Frontend
       return {
-        message: 'Documento analizado tipo Turnitin',
+        message: 'Análisis de IA completado',
         document,
-        summary, // 🔹 resumen general
-        matches: detailedMatches, // 🔥 detalle por párrafo
+        // Enviamos el porcentaje que calculó la IA
+        summary: [{
+          title: "Similitud Semántica (IA)",
+          similarity: aiSimilarity
+        }],
+        // Dejamos los matches vacíos por ahora o puedes mantener tu lógica anterior
+        matches: aiSimilarity > 10 ? [{
+            documentId: 0,
+            title: "Detección por IA",
+            similarity: aiSimilarity,
+            text1: "Análisis semántico global realizado por Sentence-BERT",
+            text2: "Comparado contra toda la base de datos"
+        }] : [], 
       };
+
     } catch (error) {
       console.error('🔥 ERROR:', error);
       throw error;
