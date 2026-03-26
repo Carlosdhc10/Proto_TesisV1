@@ -1,5 +1,4 @@
 {
-<<<<<<< HEAD
   "name": "backend",
   "version": "0.0.1",
   "description": "",
@@ -28,6 +27,7 @@
     "multer": "^2.1.1",
     "natural": "^8.1.1",
     "pdf2json": "^4.0.2",
+    "pdf-parse": "^2.4.5",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
@@ -74,9 +74,5 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
-=======
-  "dependencies": {
-    "pdf-parse": "^2.4.5"
->>>>>>> 76f6db4 (Initial commit - tesis)
   }
 }
