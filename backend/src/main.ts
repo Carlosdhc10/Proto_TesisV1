@@ -6,7 +6,7 @@ async function bootstrap() {
 
   // HABILITAR CORS
   app.enableCors({
-    origin: 'http://localhost:3001', // frontend React
+    origin: ['http://localhost:3000', 'http://localhost:3001'], // frontend React
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });

@@ -4,6 +4,6 @@ import { PlagiarismService } from './plagiarism.service';
 
 @Module({
   controllers: [PlagiarismController],
-  providers: [PlagiarismService]
+  providers: [PlagiarismService],
 })
 export class PlagiarismModule {}
