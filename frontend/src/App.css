@@ -332,6 +332,62 @@ button[disabled] {
   white-space: nowrap;
 }
 
+.match-source-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.match-source-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-source-link {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #2563eb;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-source-link:hover {
+  text-decoration: underline;
+}
+
+.match-submeta {
+  margin-top: 3px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  flex: 0 0 auto;
+}
+
+.badge--internal {
+  color: #0f172a;
+  background: #e2e8f0;
+}
+
+.badge--web {
+  color: #0b3b7a;
+  background: #dbeafe;
+}
+
 .match-value {
   font-size: 16px;
   font-weight: 700;
@@ -394,6 +450,28 @@ button[disabled] {
 
 .matches-head-meta {
   min-width: 0;
+}
+
+.matches-head-submeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.match-inline-link {
+  font-size: 11px;
+  color: #2563eb;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.match-inline-link:hover {
+  text-decoration: underline;
 }
 
 .matches-head-title {

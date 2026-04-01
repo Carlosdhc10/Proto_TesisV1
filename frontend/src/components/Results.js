@@ -17,21 +17,45 @@ export default function Results({ result }) {
     : 0;
   const content = result?.document?.content || '';
 
+  const getSourceBadge = (sourceType) => {
+    if (sourceType === 'web') return { label: 'Web', className: 'badge badge--web' };
+    return { label: 'Interno', className: 'badge badge--internal' };
+  };
+
+  const formatUrlText = (url) => {
+    if (!url) return '';
+    return url.replace(/^https?:\/\//i, '');
+  };
+
   const detailsMetrics = useMemo(() => {
     const words = content.trim() ? content.trim().split(/\s+/).length : 0;
     const paragraphs = content.trim()
       ? content.split(/\n{2,}|\r\n{2,}|\.\s+/).filter((p) => p.trim().length > 20).length
       : 0;
 
+    const internalSources = summary.filter(
+      (s) => (s.sourceType || 'internal') === 'internal',
+    ).length;
+    const webSources = summary.filter((s) => s.sourceType === 'web').length;
+
+    const matchCountBySourceId = matches.reduce((acc, m) => {
+      const key = m.documentId;
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
     return {
       words,
       paragraphs,
       sources: summary.length,
       matches: matches.length,
+      internalSources,
+      webSources,
       risk:
         total >= 80 ? 'Riesgo Alto' : total >= 50 ? 'Riesgo Medio' : 'Riesgo Bajo',
+      matchCountBySourceId,
     };
-  }, [content, matches.length, summary.length, total]);
+  }, [content, matches, summary, total]);
 
   return (
     <section className="analysis-shell">
@@ -111,6 +135,14 @@ export default function Results({ result }) {
                   <span className="detail-value">{detailsMetrics.sources}</span>
                 </div>
                 <div className="detail-item">
+                  <span className="detail-label">Fuentes internas</span>
+                  <span className="detail-value">{detailsMetrics.internalSources}</span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Fuentes web</span>
+                  <span className="detail-value">{detailsMetrics.webSources}</span>
+                </div>
+                <div className="detail-item">
                   <span className="detail-label">Coincidencias detectadas</span>
                   <span className="detail-value">{detailsMetrics.matches}</span>
                 </div>
@@ -128,6 +160,21 @@ export default function Results({ result }) {
                         </span>
                         <div className="matches-head-meta">
                           <div className="matches-head-title">{match.title}</div>
+                          <div className="matches-head-submeta">
+                            <span className={getSourceBadge(match.sourceType).className}>
+                              {getSourceBadge(match.sourceType).label}
+                            </span>
+                            {match.url ? (
+                              <a
+                                className="match-inline-link"
+                                href={match.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {match.url}
+                              </a>
+                            ) : null}
+                          </div>
                           <div className="matches-head-score">
                             {match.similarity.toFixed(2)}% similitud
                           </div>
@@ -160,7 +207,27 @@ export default function Results({ result }) {
                     <span className={`match-index ${getLevelClass(doc.similarity)}`}>
                       {idx + 1}
                     </span>
-                    <span className="match-source">{doc.title}</span>
+                    <div className="match-source">
+                      <div className="match-source-top">
+                        <span className={getSourceBadge(doc.sourceType).className}>
+                          {getSourceBadge(doc.sourceType).label}
+                        </span>
+                        <span className="match-source-title">{doc.title}</span>
+                      </div>
+                      {doc.url ? (
+                        <a
+                          className="match-source-link"
+                          href={doc.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {formatUrlText(doc.url)}
+                        </a>
+                      ) : null}
+                      <div className="match-submeta">
+                        {detailsMetrics.matchCountBySourceId[doc.documentId] || 0} fragmentos
+                      </div>
+                    </div>
                   </div>
                   <span className="match-value">{doc.similarity.toFixed(2)}%</span>
                 </div>
@@ -171,7 +238,7 @@ export default function Results({ result }) {
           )}
 
           <div className="matches-footnote">
-            Este reporte es de prototipo y usa una comparacion semantica global.
+            Reporte prototipo: similitud híbrida por tramos (IA semántica + TF-IDF) sobre fuentes internas y web.
           </div>
         </aside>
       </div>
