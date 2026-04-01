@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import axios from 'axios';
@@ -63,8 +64,26 @@ type SourceEvidence = {
   sourceUrl?: string;
 };
 
+const semanticIaUrl =
+  process.env.SEMANTIC_IA_URL ?? 'http://127.0.0.1:5000/compare';
+const semanticIaTimeoutMs = Number(
+  process.env.SEMANTIC_IA_TIMEOUT_MS ?? '120000',
+);
+const semanticIaTimeout =
+  Number.isFinite(semanticIaTimeoutMs) && semanticIaTimeoutMs > 0
+    ? semanticIaTimeoutMs
+    : 120000;
+
+const semanticTopKPerSegment = (() => {
+  const n = Number(process.env.SEMANTIC_TOP_K_PER_SEGMENT ?? '4');
+  if (!Number.isFinite(n) || n < 1) return 4;
+  return Math.min(Math.floor(n), 12);
+})();
+
 @Injectable()
 export class AnalysisService {
+  private readonly logger = new Logger(AnalysisService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly webSourceService: WebSourceService,
@@ -120,6 +139,11 @@ export class AnalysisService {
     }
 
     const segments = this.buildSegments(targetText);
+    if (sourceDocuments.length) {
+      this.logger.log(
+        `Análisis documento ${documentId}: ${sourceDocuments.length} fuente(s), ${segments.length} segmento(s); hasta ${semanticTopKPerSegment} consulta(s) IA por segmento (el cliente espera hasta terminar).`,
+      );
+    }
     const evidence = await this.collectEvidenceBySegment(segments, sourceDocuments);
     const summary = this.buildSourceRanking(segments, evidence);
     const matches = this.buildMatchesFromEvidence(evidence);
@@ -177,6 +201,12 @@ export class AnalysisService {
       const segment = segments[segmentIndex];
       let bestForSegment: SourceEvidence | null = null;
 
+      const lexicalRanked: {
+        sourceDocument: SourceDocument;
+        lexicalSimilarity: number;
+        sourceText: string;
+      }[] = [];
+
       for (const sourceDocument of sourceDocuments) {
         const sourceText = sourceDocument.content?.trim() || '';
         if (!sourceText) continue;
@@ -184,6 +214,20 @@ export class AnalysisService {
         const lexicalSimilarity = calculateSimilarity(segment, sourceText);
         if (lexicalSimilarity < lexicalThreshold) continue;
 
+        lexicalRanked.push({ sourceDocument, lexicalSimilarity, sourceText });
+      }
+
+      lexicalRanked.sort((a, b) => b.lexicalSimilarity - a.lexicalSimilarity);
+      const candidatesForSemantic = lexicalRanked.slice(
+        0,
+        semanticTopKPerSegment,
+      );
+
+      for (const {
+        sourceDocument,
+        lexicalSimilarity,
+        sourceText,
+      } of candidatesForSemantic) {
         const semanticSimilarity = await this.getSemanticSimilarity(segment, sourceText);
         const combinedSimilarity = this.round(
           (lexicalSimilarity * 0.55) + (semanticSimilarity * 0.45),
@@ -324,13 +368,13 @@ export class AnalysisService {
 
     try {
       const response = await axios.post(
-        'http://localhost:5000/compare',
+        semanticIaUrl,
         {
           texto_nuevo: text1,
           textos_base: [text2],
         },
         {
-          timeout: 9000,
+          timeout: semanticIaTimeout,
         },
       );
 
@@ -351,9 +395,9 @@ export class AnalysisService {
 
   private getMaxSegments(text: string): number {
     const words = text.trim().split(/\s+/).length;
-    if (words <= 700) return 45;
-    if (words <= 1800) return 70;
-    return 95;
+    if (words <= 700) return 22;
+    if (words <= 1800) return 38;
+    return 52;
   }
 
   private detectLanguage(text: string): 'es' | 'unknown' {
