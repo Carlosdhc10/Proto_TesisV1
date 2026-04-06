@@ -41,6 +41,9 @@ export type AnalysisResponse = {
   summary: AnalysisSource[];
   matches: AnalysisMatch[];
   overallSimilarity: number;
+  semanticServiceStatus: 'ok' | 'degraded';
+  /** Tiempo total del análisis en el servidor (ms). */
+  analysisDurationMs: number;
 };
 
 type SourceDocument = {
@@ -80,6 +83,31 @@ const semanticTopKPerSegment = (() => {
   return Math.min(Math.floor(n), 12);
 })();
 
+const semanticIaMaxAttempts = (() => {
+  const n = Number(process.env.SEMANTIC_IA_MAX_ATTEMPTS ?? '2');
+  if (!Number.isFinite(n) || n < 1) return 2;
+  return Math.min(Math.floor(n), 5);
+})();
+
+const semanticIaRetryDelayMs = (() => {
+  const n = Number(process.env.SEMANTIC_IA_RETRY_DELAY_MS ?? '400');
+  if (!Number.isFinite(n) || n < 0) return 400;
+  return Math.min(Math.floor(n), 5000);
+})();
+
+/** Límite de segmentos a analizar (evita cuelgues en textos enormes). Subir con VARIABLE DE ENTORNO si hace falta más cobertura. */
+const analysisMaxSegments = (() => {
+  const n = Number(process.env.ANALYSIS_MAX_SEGMENTS ?? '2000');
+  if (!Number.isFinite(n) || n < 1) return 2000;
+  return Math.min(Math.floor(n), 10000);
+})();
+
+const analysisMaxMatchesOut = (() => {
+  const n = Number(process.env.ANALYSIS_MAX_MATCHES_OUT ?? '800');
+  if (!Number.isFinite(n) || n < 1) return 800;
+  return Math.min(Math.floor(n), 5000);
+})();
+
 @Injectable()
 export class AnalysisService {
   private readonly logger = new Logger(AnalysisService.name);
@@ -91,6 +119,8 @@ export class AnalysisService {
   private semanticCache = new Map<string, number>();
 
   async analyzeDocument(documentId: number): Promise<AnalysisResponse> {
+    const startedAt = Date.now();
+    const semanticState = { degraded: false };
     const targetDocument = await this.prisma.document.findUnique({
       where: { id: documentId },
     });
@@ -135,6 +165,8 @@ export class AnalysisService {
         summary: [],
         matches: [],
         overallSimilarity: 0,
+        semanticServiceStatus: 'ok',
+        analysisDurationMs: Date.now() - startedAt,
       };
     }
 
@@ -144,7 +176,11 @@ export class AnalysisService {
         `Análisis documento ${documentId}: ${sourceDocuments.length} fuente(s), ${segments.length} segmento(s); hasta ${semanticTopKPerSegment} consulta(s) IA por segmento (el cliente espera hasta terminar).`,
       );
     }
-    const evidence = await this.collectEvidenceBySegment(segments, sourceDocuments);
+    const evidence = await this.collectEvidenceBySegment(
+      segments,
+      sourceDocuments,
+      semanticState,
+    );
     const summary = this.buildSourceRanking(segments, evidence);
     const matches = this.buildMatchesFromEvidence(evidence);
     const overallSimilarity = summary.length
@@ -166,30 +202,41 @@ export class AnalysisService {
       summary,
       matches,
       overallSimilarity,
+      semanticServiceStatus: semanticState.degraded ? 'degraded' : 'ok',
+      analysisDurationMs: Date.now() - startedAt,
     };
   }
 
   private buildSegments(targetText: string): string[] {
-    const byParagraph = splitIntoParagraphs(targetText)
-      .map((paragraph) => paragraph.trim())
-      .filter((paragraph) => paragraph.length > 40);
-    const maxSegments = this.getMaxSegments(targetText);
+    const byParagraph = splitIntoParagraphs(targetText);
+    const maxSegments = analysisMaxSegments;
 
     if (byParagraph.length) {
+      if (byParagraph.length > maxSegments) {
+        this.logger.warn(
+          `Texto partido en ${byParagraph.length} segmentos; se analizan los primeros ${maxSegments}. Aumenta ANALYSIS_MAX_SEGMENTS si necesitas el 100%.`,
+        );
+      }
       return byParagraph.slice(0, maxSegments);
     }
 
-    // Fallback for texts without clear paragraph delimiters.
-    return targetText
+    // Fallback: oraciones si no hay saltos de línea útiles
+    const fallback = targetText
       .split(/(?<=[.!?])\s+/)
       .map((segment) => segment.trim())
-      .filter((segment) => segment.length > 40)
-      .slice(0, maxSegments);
+      .filter((segment) => segment.length >= 25);
+    if (fallback.length > maxSegments) {
+      this.logger.warn(
+        `Fallback por oraciones: ${fallback.length} trozos; se analizan ${maxSegments}.`,
+      );
+    }
+    return fallback.slice(0, maxSegments);
   }
 
   private async collectEvidenceBySegment(
     segments: string[],
     sourceDocuments: SourceDocument[],
+    semanticState: { degraded: boolean },
   ): Promise<SourceEvidence[]> {
     const evidence: SourceEvidence[] = [];
 
@@ -228,7 +275,11 @@ export class AnalysisService {
         lexicalSimilarity,
         sourceText,
       } of candidatesForSemantic) {
-        const semanticSimilarity = await this.getSemanticSimilarity(segment, sourceText);
+        const semanticSimilarity = await this.getSemanticSimilarity(
+          segment,
+          sourceText,
+          semanticState,
+        );
         const combinedSimilarity = this.round(
           (lexicalSimilarity * 0.55) + (semanticSimilarity * 0.45),
         );
@@ -304,7 +355,7 @@ export class AnalysisService {
   private buildMatchesFromEvidence(evidence: SourceEvidence[]): AnalysisMatch[] {
     return evidence
       .sort((a, b) => b.combinedSimilarity - a.combinedSimilarity)
-      .slice(0, 20)
+      .slice(0, analysisMaxMatchesOut)
       .map((item) => ({
         documentId: item.sourceId,
         title: item.sourceTitle,
@@ -359,45 +410,64 @@ export class AnalysisService {
     return bestSentence.slice(0, 240);
   }
 
-  private async getSemanticSimilarity(text1: string, text2: string): Promise<number> {
+  private async getSemanticSimilarity(
+    text1: string,
+    text2: string,
+    semanticState: { degraded: boolean },
+  ): Promise<number> {
     const cacheKey = `${this.shortenForCache(text1)}::${this.shortenForCache(text2)}`;
     const cached = this.semanticCache.get(cacheKey);
     if (cached !== undefined) {
       return cached;
     }
 
-    try {
-      const response = await axios.post(
-        semanticIaUrl,
-        {
-          texto_nuevo: text1,
-          textos_base: [text2],
-        },
-        {
-          timeout: semanticIaTimeout,
-        },
-      );
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= semanticIaMaxAttempts; attempt += 1) {
+      try {
+        const response = await axios.post(
+          semanticIaUrl,
+          {
+            texto_nuevo: text1,
+            textos_base: [text2],
+          },
+          {
+            timeout: semanticIaTimeout,
+          },
+        );
 
-      const payload = response.data as { similitud_ia?: number };
-      const similarity = this.round(payload.similitud_ia || 0);
-      this.semanticCache.set(cacheKey, similarity);
-      return similarity;
-    } catch (error) {
-      if (error instanceof Error) {
-        console.error('Error IA semantica:', error.message);
-      } else {
-        console.error('Error IA semantica desconocido');
+        const payload = response.data as { similitud_ia?: number };
+        const similarity = this.round(payload.similitud_ia || 0);
+        this.semanticCache.set(cacheKey, similarity);
+        if (attempt > 1) {
+          this.logger.log(
+            `IA semántica: OK en intento ${attempt}/${semanticIaMaxAttempts} (${semanticIaUrl})`,
+          );
+        }
+        return similarity;
+      } catch (error) {
+        lastError = error;
+        const msg = error instanceof Error ? error.message : String(error);
+        if (attempt < semanticIaMaxAttempts) {
+          this.logger.warn(
+            `IA semántica falló (intento ${attempt}/${semanticIaMaxAttempts}): ${msg}. Reintento en ${semanticIaRetryDelayMs}ms`,
+          );
+          await this.delay(semanticIaRetryDelayMs);
+        }
       }
-      this.semanticCache.set(cacheKey, 0);
-      return 0;
     }
+
+    const finalMsg =
+      lastError instanceof Error ? lastError.message : String(lastError);
+    this.logger.warn(
+      `IA semántica no respondió tras ${semanticIaMaxAttempts} intento(s): ${finalMsg}`,
+    );
+    this.semanticCache.set(cacheKey, 0);
+    semanticState.degraded = true;
+    return 0;
   }
 
-  private getMaxSegments(text: string): number {
-    const words = text.trim().split(/\s+/).length;
-    if (words <= 700) return 22;
-    if (words <= 1800) return 38;
-    return 52;
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private detectLanguage(text: string): 'es' | 'unknown' {

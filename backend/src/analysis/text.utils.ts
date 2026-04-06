@@ -56,10 +56,22 @@ export function cleanText(text: string): string {
     .join(' ');
 }
 
-// 🔹 Separar por párrafos
+// 🔹 Segmentos tipo párrafo (PDF a menudo trae \n; queremos cubrir más del documento)
 export function splitIntoParagraphs(text: string): string[] {
-  return text
-    .split(/\n|\r|\.\s+/) // separa por saltos o puntos
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return [];
+
+  const byBlankLine = normalized
+    .split(/\n\s*\n+/)
     .map((p) => p.trim())
-    .filter((p) => p.length > 30); // evitar ruido
+    .filter((p) => p.length >= 12);
+
+  if (byBlankLine.length >= 2) {
+    return byBlankLine;
+  }
+
+  return normalized
+    .split(/\n+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length >= 12);
 }

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import HighlightText from './HighlightText';
+import { buildSourceColorMap } from '../utils/sourcePalette';
 
 export default function Results({ result }) {
   const [activeTab, setActiveTab] = useState('originality');
@@ -10,11 +11,13 @@ export default function Results({ result }) {
     return 'level level--low';
   };
 
-  const summary = result?.summary || [];
-  const matches = result?.matches || [];
-  const total = summary.length
-    ? summary.reduce((acc, doc) => acc + doc.similarity, 0) / summary.length
-    : 0;
+  const summary = useMemo(() => result?.summary || [], [result?.summary]);
+  const matches = useMemo(() => result?.matches || [], [result?.matches]);
+  const total = typeof result?.overallSimilarity === 'number'
+    ? result.overallSimilarity
+    : (summary.length
+      ? summary.reduce((acc, doc) => acc + doc.similarity, 0) / summary.length
+      : 0);
   const content = result?.document?.content || '';
 
   const getSourceBadge = (sourceType) => {
@@ -26,6 +29,8 @@ export default function Results({ result }) {
     if (!url) return '';
     return url.replace(/^https?:\/\//i, '');
   };
+
+  const sourceColors = useMemo(() => buildSourceColorMap(summary), [summary]);
 
   const detailsMetrics = useMemo(() => {
     const words = content.trim() ? content.trim().split(/\s+/).length : 0;
@@ -104,12 +109,15 @@ export default function Results({ result }) {
           </header>
 
           <div className="document-content">
+            {result?.semanticServiceStatus === 'degraded' ? (
+              <div className="alert alert--warning">
+                El analisis semantico de IA estuvo degradado en esta corrida.
+                El resultado puede tener menor precision.
+              </div>
+            ) : null}
+
             {activeTab === 'originality' && (
-              <HighlightText
-                text={content}
-                matches={matches}
-                totalSimilarity={total}
-              />
+              <HighlightText text={content} matches={matches} summary={summary} />
             )}
 
             {activeTab === 'details' && (
@@ -117,6 +125,24 @@ export default function Results({ result }) {
                 <div className="detail-item">
                   <span className="detail-label">Similitud global</span>
                   <span className="detail-value">{total.toFixed(2)}%</span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Servicio IA semantica</span>
+                  <span className="detail-value">
+                    {result?.semanticServiceStatus === 'degraded'
+                      ? 'Degradado'
+                      : 'Operativo'}
+                  </span>
+                </div>
+                <div className="detail-item">
+                  <span className="detail-label">Tiempo de analisis (servidor)</span>
+                  <span className="detail-value">
+                    {typeof result?.analysisDurationMs === 'number'
+                      ? result.analysisDurationMs < 1000
+                        ? `${result.analysisDurationMs} ms`
+                        : `${(result.analysisDurationMs / 1000).toFixed(2)} s`
+                      : '—'}
+                  </span>
                 </div>
                 <div className="detail-item">
                   <span className="detail-label">Nivel de riesgo</span>
@@ -153,7 +179,15 @@ export default function Results({ result }) {
               <div className="matches-detail-list">
                 {matches.length ? (
                   matches.map((match, idx) => (
-                    <div key={`${match.documentId}-${idx}`} className="matches-detail-card">
+                    <div
+                      key={`${match.documentId}-${idx}`}
+                      className="matches-detail-card"
+                      style={{
+                        borderLeft: `4px solid ${
+                          sourceColors.get(match.documentId) || '#cbd5e1'
+                        }`,
+                      }}
+                    >
                       <div className="matches-detail-head">
                         <span className={`match-index ${getLevelClass(match.similarity)}`}>
                           {idx + 1}
@@ -204,6 +238,14 @@ export default function Results({ result }) {
               {summary.map((doc, idx) => (
                 <div key={`${doc.title}-${idx}`} className="match-row">
                   <div className="match-left">
+                    <span
+                      className="source-color-dot"
+                      style={{
+                        backgroundColor:
+                          sourceColors.get(doc.documentId) || '#94a3b8',
+                      }}
+                      title={`Fuente ${idx + 1}`}
+                    />
                     <span className={`match-index ${getLevelClass(doc.similarity)}`}>
                       {idx + 1}
                     </span>

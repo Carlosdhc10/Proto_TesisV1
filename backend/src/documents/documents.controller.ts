@@ -37,14 +37,9 @@ export class DocumentsController {
     }
 
     const { userId, title } = body;
-    const numericUserId = Number(userId);
-    if (Number.isNaN(numericUserId) || numericUserId <= 0) {
-      throw new BadRequestException('userId invalido');
-    }
-
     const savedDocument = await this.documentsService.saveDocument(
       file,
-      numericUserId,
+      userId,
       title.trim(),
     );
 

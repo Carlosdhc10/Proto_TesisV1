@@ -8,11 +8,16 @@ export type ExternalSourceDocument = {
   content: string;
   sourceType: 'web';
   url?: string;
-  provider: 'wikipedia' | 'openalex' | 'serpapi';
+  provider:
+    | 'wikipedia'
+    | 'openalex'
+    | 'serpapi'
+    | 'semantic_scholar'
+    | 'serpapi_google_scholar';
 };
 
 type SearchProvider = {
-  name: 'wikipedia' | 'openalex' | 'serpapi';
+  name: ExternalSourceDocument['provider'];
   search(query: string, limit: number): Promise<ExternalSourceDocument[]>;
 };
 
@@ -24,6 +29,8 @@ export class WebSourceService {
     this.providers = [
       this.createWikipediaProvider(),
       this.createOpenAlexProvider(),
+      this.createSemanticScholarProvider(),
+      this.createSerpApiGoogleScholarProvider(),
       this.createSerpApiProvider(),
     ];
   }
@@ -43,7 +50,7 @@ export class WebSourceService {
       }
     }
 
-    return this.deduplicateByUrlOrContent(merged).slice(0, 12);
+    return this.deduplicateByUrlOrContent(merged).slice(0, 18);
   }
 
   private createWikipediaProvider(): SearchProvider {
@@ -119,6 +126,111 @@ export class WebSourceService {
         }
 
         return docs;
+      },
+    };
+  }
+
+  /**
+   * API pública de Semantic Scholar (papers académicos reales).
+   * Recomiendan identificar la app en User-Agent (opcional: CONTACT_EMAIL en .env).
+   * No sustituye legalmente a “Google Scholar”, pero sí da fuentes verificables tipo paper.
+   */
+  private createSemanticScholarProvider(): SearchProvider {
+    return {
+      name: 'semantic_scholar',
+      search: async (query: string, limit: number): Promise<ExternalSourceDocument[]> => {
+        const contact =
+          process.env.CONTACT_EMAIL || 'prototipo-tesis@localhost';
+        const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${Math.min(limit, 5)}&fields=title,abstract,url,year`;
+        try {
+          const response = await axios.get(url, {
+            timeout: 12000,
+            headers: {
+              'User-Agent': `PrototipoTesis/1.0 (mailto:${contact})`,
+            },
+          });
+          const payload = response.data as {
+            data?: Array<{
+              paperId?: string;
+              title?: string;
+              abstract?: string;
+              url?: string;
+              year?: number;
+            }>;
+          };
+          const rows = payload.data || [];
+          const docs: ExternalSourceDocument[] = [];
+          for (const row of rows) {
+            const abstract = (row.abstract || '').trim();
+            if (abstract.length < 80) continue;
+            const title = row.title || 'Paper (Semantic Scholar)';
+            const paperUrl =
+              row.url ||
+              (row.paperId
+                ? `https://www.semanticscholar.org/paper/${row.paperId}`
+                : undefined);
+            docs.push({
+              id: -Math.abs(
+                this.hashString(row.paperId || title + abstract.slice(0, 40)),
+              ),
+              title: row.year ? `${title} (${row.year})` : title,
+              content: abstract,
+              sourceType: 'web',
+              url: paperUrl,
+              provider: 'semantic_scholar',
+            });
+          }
+          return docs;
+        } catch {
+          return [];
+        }
+      },
+    };
+  }
+
+  /**
+   * Resultados tipo Google Scholar vía SerpAPI (de pago). Requiere SERPAPI_KEY.
+   * Documentación: https://serpapi.com/google-scholar-api
+   */
+  private createSerpApiGoogleScholarProvider(): SearchProvider {
+    const apiKey = process.env.SERPAPI_KEY;
+    if (!apiKey) {
+      return {
+        name: 'serpapi_google_scholar',
+        search: async () => [],
+      };
+    }
+
+    return {
+      name: 'serpapi_google_scholar',
+      search: async (query: string, limit: number): Promise<ExternalSourceDocument[]> => {
+        const url = `https://serpapi.com/search.json?engine=google_scholar&q=${encodeURIComponent(query)}&hl=es&num=${Math.min(limit, 5)}&api_key=${encodeURIComponent(apiKey)}`;
+        try {
+          const response = await axios.get(url, { timeout: 12000 });
+          const payload = response.data as {
+            organic_results?: Array<{
+              title?: string;
+              link?: string;
+              snippet?: string;
+              publication_info?: { summary?: string };
+            }>;
+          };
+          const results = payload.organic_results || [];
+          return results
+            .filter((item) => (item.snippet || '').trim().length > 50)
+            .map((item, idx) => ({
+              id: -Math.abs(
+                this.hashString(`${item.link || ''}-scholar-${idx}`),
+              ),
+              title: item.title || 'Google Scholar (vía SerpAPI)',
+              content: item.snippet || '',
+              sourceType: 'web' as const,
+              url: item.link,
+              provider: 'serpapi_google_scholar' as const,
+            }));
+        } catch {
+          return [];
+        }
       },
     };
   }

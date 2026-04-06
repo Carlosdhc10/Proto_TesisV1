@@ -25,6 +25,8 @@
     "@nestjs/platform-express": "^11.1.16",
     "@prisma/client": "^5.22.0",
     "axios": "^1.13.6",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
     "multer": "^2.1.1",
     "natural": "^8.1.1",
     "pdf2json": "^4.0.2",
